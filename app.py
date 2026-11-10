@@ -16,15 +16,18 @@ st.markdown(
 )
 
 
-# 데이터 캐싱 (로딩 속도 개선)
+# 데이터 캐싱 및 안정화된 수집 로직
 @st.cache_data
 def load_data():
-  start_year = 2006
+  # 클라우드 서버 IP 차단을 방지하기 위해 최근 10년(2016년~) 또는 15년치로 최적화
+  start_year = 2016
   current_year = datetime.now().year
   current_date_str = datetime.now().strftime("%Y%m%d")
 
   df_list = []
-  kospi_ticker = "1001"
+  kospi_ticker = "1001"  # 코스피 지수
+
+  error_messages = []
 
   for year in range(start_year, current_year + 1):
     s_date = f"{year}0101"
@@ -34,31 +37,32 @@ def load_data():
 
     try:
       df = stock.get_index_fundamental(s_date, e_date, kospi_ticker)
-      if not df.empty:
+      if df is not None and not df.empty:
         df_list.append(df)
-    except:
-      pass
+    except Exception as e:
+      error_messages.append(f"{year}년 수집 에러: {str(e)}")
 
   if df_list:
     kospi_df = pd.concat(df_list)
     kospi_df = kospi_df.dropna(subset=["PER", "PBR"])
+    # 중복 날짜 제거 (혹시 모를 겹침 방지)
+    kospi_df = kospi_df[~kospi_df.index.duplicated(keep="last")]
     # 주가기대수익률(Earnings Yield, %) 계산
     kospi_df["Earnings_Yield"] = (1 / kospi_df["PER"]) * 100
-    return kospi_df
+    return kospi_df, None
   else:
-    return pd.DataFrame()
+    return pd.DataFrame(), error_messages
 
 
 # 데이터 로드 실행
 with st.spinner(
-    "KRX에서 코스피 20년치 데이터를 불러오는 중입니다... 잠시만 기다려주세요!"
+    "KRX에서 코스피 장기 데이터를 불러오는 중입니다... 잠시만 기다려주세요!"
 ):
-  df = load_data()
+  df, errs = load_data()
 
 if not df.empty:
   # 최신 지표 추출
   latest_date = df.index[-1].strftime("%Y-%m-%d")
-  latest_close = df["종가"].iloc[-1] if "종가" in df.columns else 0
   latest_per = df["PER"].iloc[-1]
   latest_pbr = df["PBR"].iloc[-1]
   latest_ey = df["Earnings_Yield"].iloc[-1]
@@ -143,4 +147,9 @@ if not df.empty:
         " 범위 내에서 움직이고 있습니다."
     )
 else:
-  st.error("데이터를 불러오지 못했습니다. 네트워크 상태를 확인해주세요.")
+  st.error(
+      "데이터를 불러오지 못했습니다. KRX 서버 차단 또는 네트워크 상태를"
+      " 확인해주세요."
+  )
+  if errs:
+    st.write("상세 에러 내용:", errs)
