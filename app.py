@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -15,41 +15,51 @@ st.markdown(
 )
 
 
-# 데이터 로드 함수 (파일이 없어도 에러가 나지 않고 샘플 데이터를 생성하는 안전 장치 포함)
+# 데이터 로드 함수 (오류 원인 원천 차단)
 @st.cache_data
 def load_data():
-  try:
-    # 1. 사용자가 올린 CSV 파일 읽기 시도
-    df = pd.read_csv("kospi_eps_data.csv", encoding="cp949")
-  except Exception:
+  # 1. 파일 읽기 시도 ('kospi_eps_data.csv' 또는 기존에 올리셨던 'kospi_data.csv' 모두 대응)
+  target_files = ["kospi_eps_data.csv", "kospi_data.csv"]
+  df = None
+
+  for filename in target_files:
     try:
-      df = pd.read_csv("kospi_eps_data.csv", encoding="utf-8-sig")
+      df = pd.read_csv(filename, encoding="cp949")
+      break
     except Exception:
-      # 파일이 아직 없거나 읽기 실패 시, 앱이 꺼지지 않도록 최근 5년치 가상(샘플) 데이터를 자동 생성하여 반환
-      dates = pd.date_range(end=datetime.today(), periods=60, freq="M")
-      import numpy as np
+      try:
+        df = pd.read_csv(filename, encoding="utf-8-sig")
+        break
+      except Exception:
+        continue
 
-      np.random.seed(42)
-      sample_per = np.linspace(10, 12, 60) + np.random.normal(0, 1, 60)
-      sample_close = np.linspace(2500, 3000, 60) + np.random.normal(
-          0, 50, 60
-      )
-      sample_eps = sample_close / sample_per
+  # 2. 파일을 못 찾았을 경우 안전한 샘플 데이터 생성 (최신 판다스 호환 freq='ME')
+  if df is None or df.empty:
+    import numpy as np
 
-      df_sample = pd.DataFrame({
-          "Date": dates,
-          "Close": sample_close,
-          "PER": sample_per,
-          "EPS": sample_eps,
-      })
-      df_sample.set_index("Date", inplace=True)
-      df_sample["Earnings_Yield"] = (1 / df_sample["PER"]) * 100
-      return df_sample, "샘플 데이터로 구동 중입니다 (실제 CSV를 업로드하면 반영됩니다)."
+    dates = pd.date_range(end=datetime.today(), periods=60, freq="ME")
+    np.random.seed(42)
+    sample_per = np.linspace(10, 12, 60) + np.random.normal(0, 1, 60)
+    sample_close = np.linspace(2500, 3000, 60) + np.random.normal(0, 50, 60)
+    sample_eps = sample_close / sample_per
+
+    df_sample = pd.DataFrame({
+        "Date": dates,
+        "Close": sample_close,
+        "PER": sample_per,
+        "EPS": sample_eps,
+    })
+    df_sample.set_index("Date", inplace=True)
+    df_sample["Earnings_Yield"] = (1 / df_sample["PER"]) * 100
+    return (
+        df_sample,
+        "현재 업로드된 CSV 파일이 없어 가상 샘플 데이터로 구동 중입니다. 원하시는"
+        " CSV 파일을 업로드하면 즉시 반영됩니다.",
+    )
 
   # 정상적으로 파일을 읽었을 경우 전처리
   df.columns = df.columns.str.strip()
 
-  # 컬럼 자동 매핑
   date_col = next(
       (
           col
@@ -83,7 +93,7 @@ def load_data():
         df[per_col].astype(str).str.replace(",", ""), errors="coerce"
     )
   else:
-    return pd.DataFrame(), "PER 컬럼을 찾을 수 없습니다."
+    return pd.DataFrame(), "데이터 파일에서 PER 컬럼을 찾을 수 없습니다."
 
   if close_col:
     clean_df["Close"] = pd.to_numeric(
@@ -125,7 +135,7 @@ if not df.empty:
   ey_mean = df["Earnings_Yield"].mean()
   ey_std = df["Earnings_Yield"].std()
 
-  # 상단 핵심 요약 지표 카드 배치 (오늘자 / 최신 기준)
+  # 상단 핵심 요약 지표 카드 배치
   st.subheader(f"📌 코스피 핵심 밸류에이션 지표 (기준일: {latest_date})")
   col1, col2, col3, col4, col5 = st.columns(5)
   col1.metric("코스피 지수", f"{latest_close:,.2f}" if latest_close > 0 else "정보 없음")
@@ -137,7 +147,7 @@ if not df.empty:
   st.divider()
 
   # 차트 시각화 (Plotly)
-  st.subheader("📊 코스피 5년 장기 주가기대수익률(Earnings Yield) 추이")
+  st.subheader("📊 코스피 장기 주가기대수익률(Earnings Yield) 추이")
 
   fig = go.Figure()
   fig.add_trace(
